@@ -1,0 +1,117 @@
+<!--
+  SmokeSense Mock Viewer
+  © 2025 SmokeSense Project
+
+  Demonstrates:
+   • Per-session wildfire smoke playback
+   • Real-time room PM2.5 overlays
+
+-->
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>SmokeSense Mock</title>
+  <style>
+    body { font-family: sans-serif; padding: 1rem; }
+    pre  { background: #f4f4f4; padding: 1rem; white-space: pre-wrap; }
+  </style>
+</head>
+<body>
+  <h1>SmokeSense Mock</h1>
+  <h2>Outdoor PM₂.₅</h2>
+  <pre id="outdoor">–</pre>
+  <h2>Rooms</h2>
+  <pre id="rooms">–</pre>
+
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/9.23.0/firebase-app.js";
+    import { getFunctions, connectFunctionsEmulator } from "https://www.gstatic.com/firebasejs/9.23.0/firebase-functions.js";
+    import {
+      getFirestore,
+      connectFirestoreEmulator,
+      collection,
+      getDocs
+    } from "https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore.js";
+
+    // Firebase config
+    const firebaseConfig = {
+      apiKey:    "YOUR_API_KEY",
+      authDomain:"smokesense-543b9.firebaseapp.com",
+      projectId: "smokesense-543b9"
+    };
+    const app = initializeApp(firebaseConfig);
+    const functions = getFunctions(app);
+    const db = getFirestore(app);
+
+    //hook up to emulators when running locally
+if (location.hostname === "localhost" || location.hostname === "127.0.0.1") {
+  connectFunctionsEmulator(functions, "localhost", 5001);
+  connectFirestoreEmulator(db, "localhost", 8080);
+  console.log("⚙️ Connected to local emulators");
+}
+
+    let sessionId = "";
+
+    // Helper: fetch & render rooms
+    async function renderRooms() {
+      console.log("renderRooms() for sessionId:", sessionId);
+      try {
+        const snap = await getDocs(collection(db, `sessions/${sessionId}/rooms`));
+        console.log("Got room docs:", snap.docs.map(d=>d.id));
+        if (snap.empty) {
+          document.getElementById("rooms").textContent = "(no rooms yet)";
+          return;
+        }
+        const lines = snap.docs.map(d => {
+          const { pm25, leakFactor } = d.data();
+          return `${d.id}: ${pm25.toFixed(1)} µg/m³ (leak ${leakFactor.toFixed(2)})`;
+        });
+        document.getElementById("rooms").textContent = lines.join("\n");
+      } catch (err) {
+        console.error("renderRooms error:", err);
+        document.getElementById("rooms").textContent = "Error loading rooms";
+      }
+    }
+
+    //Kick everything off
+    async function init() {
+      console.log("init() starting");
+      try {
+        const res = await fetch("/stepPlayback", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: "{}"
+        });
+        const { sessionId: sid, outdoor } = await res.json();
+        sessionId = sid;
+        console.log("Init got sessionId:", sessionId, "outdoor:", outdoor);
+        document.getElementById("outdoor").textContent = outdoor.toFixed(1);
+
+        // Initial rooms render
+        await renderRooms();
+
+        // Loop every 10s
+        setInterval(async () => {
+          console.log("Tick for sessionId:", sessionId);
+          const r = await fetch("/stepPlayback", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ sessionId })
+          });
+          const { outdoor: o } = await r.json();
+          console.log("Tick outdoor →", o);
+          document.getElementById("outdoor").textContent = o.toFixed(1);
+          await renderRooms();
+        }, 10000);
+
+      } catch (e) {
+        console.error("init error:", e);
+      }
+    }
+
+    init();
+  </script>
+</body>
+</html>
